@@ -1,0 +1,201 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS VPC Sample @ us-west-2(Oregon)'
+
+Parameters:
+  CidrPrefix:
+    Type: String
+    Description: CIDR prefix
+    MinLength: 1
+    Default: '10.26'
+  Ec2ImageId:
+    Type: 'AWS::EC2::Image::Id'
+    Description: AmazonLinux2 Image Name @ us-west-2(Oregon)
+    Default: 'ami-061e7ebbc234015fe'
+  Ec2InstanceType:
+    Type: String
+    Description: Ec2InstanceType
+    MinLength: 1
+    Default: 't2.micro'
+  Ec2KeyName:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Description: Ec2KeyName
+
+
+Resources:
+  # 1. VPCを作成する
+  Vpc:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Sub "${CidrPrefix}.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "vpc-for-${AWS::StackName}"
+
+  # 2. Internet Gatewayを作成して、VPCにアタッチする
+  Igw:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "igw-for-${AWS::StackName}"
+  IgwAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref Igw
+      VpcId: !Ref Vpc
+
+  # 3. パブリックSubnetを作成する(Availability Zone: a)
+  SubnetPublicA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Sub "${CidrPrefix}.10.0/24"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "public-subnet-a-for-${AWS::StackName}"
+      VpcId: !Ref Vpc
+
+  # 4. パブリック用RouteTableを作成する
+  RouteTablePublic:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "route-table-public-for-${AWS::StackName}"
+
+  # 5. パブリック用RouteTableにInternetGatewayのルートを追加する
+  RoutePublic:
+    Type: 'AWS::EC2::Route'
+    DependsOn: IgwAttachment
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref Igw
+
+  # 6. パブリック用RouteTableにパブリックSubnetを関連付けする
+  SubnetRouteTableAssociationPublicA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      SubnetId: !Ref SubnetPublicA
+
+  # 7. プライベートSubentを作成する(Availability Zone: a)
+  SubnetPrivateA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Sub "${CidrPrefix}.20.0/24"
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "private-subnet-a-for-${AWS::StackName}"
+      VpcId: !Ref Vpc
+
+  # 8. NatGateway用のElasticIPを作成する
+  EIP:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+
+  # 9. 作成しておいたElasticIPを利用して、NatGatewayを作成する
+  NatGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt EIP.AllocationId
+      SubnetId: !Ref SubnetPublicA
+      Tags:
+        - Key: Name
+          Value: !Sub "nat-gataway-for-${AWS::StackName}"
+
+  # 10. プライベート用RouteTableを作成する
+  RouteTablePrivate:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "route-table-private-for-${AWS::StackName}"
+
+  # 11. プライベート用RouteTableにNatGatewayのルートを追加する
+  RoutePrivate:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # 12. プライベート用RouteTableにプライベートSubnetを関連付けする
+  SubnetRouteTableAssociationPrivateA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      SubnetId: !Ref SubnetPrivateA
+
+  # 13. パブリックSubnetにCloud9を作成する
+  Cloud9InPublic:
+    Type: 'AWS::Cloud9::EnvironmentEC2'
+    Properties:
+      Description: 'Cloud9 for VPCLive'
+      AutomaticStopTimeMinutes: 30
+      InstanceType: 't2.micro'
+      Name: !Sub "cloud9-for-${AWS::StackName}"
+      SubnetId: !Ref SubnetPublicA
+
+  # 14. EC2用のSecurityGroupを作成する
+  SecurityGroupForEc2:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupName: !Sub "ec2-sg-for-${AWS::StackName}"
+      GroupDescription: SecurityGroup for EC2
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: ICMP
+          FromPort: -1
+          ToPort: -1
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: !Sub "ec2-sg-for-${AWS::StackName}"
+
+  # 15. プライベートSubnetにEC2を作成する
+  Ec2InPrivate:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      ImageId: !Ref Ec2ImageId
+      InstanceInitiatedShutdownBehavior: stop
+      KeyName: !Ref Ec2KeyName
+      InstanceType: !Ref Ec2InstanceType
+      SecurityGroupIds:
+        - !Ref SecurityGroupForEc2
+      SubnetId: !Ref SubnetPrivateA
+      Tags:
+        - Key: Name
+          Value: !Sub "ec2-instance-for-${AWS::StackName}"
+
+
+Outputs:
+  CommandForPing:
+    Description: 'command for ping'
+    Value: !Sub
+      - ping {PrivateIP}
+      - {
+          PrivateIP: !GetAtt Ec2InPrivate.PrivateIp
+        }
+  CommandForSSH:
+    Description: 'command for ssh'
+    Value: !Sub
+      - ssh -i ~/.ssh/${KeyName} ec2-user@${PrivateIP}
+      - {
+          KeyName: !Ref Ec2KeyName,
+          PrivateIP: !GetAtt Ec2InPrivate.PrivateIp
+        }
