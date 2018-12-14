@@ -9,9 +9,9 @@ AWSでVPC,Subnet,SecurityGroupを一通り構築して理解するための、
 
 ![AWS](./img/aws.png)
 
-## 使い方
+## 解説
 
-（WorkInProgress）
+[Qiita:AWSのVPC,Subnet,SecurityGroupを一通り構築して理解しよう](https://qiita.com/rednes/items/24135187191c07f8e1f3)
 
 ## CloudFormationテンプレート
 
